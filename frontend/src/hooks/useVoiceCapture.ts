@@ -9,6 +9,7 @@ export function useVoiceCapture(onChunk: (base64: string) => void): {
   const workletRef = useRef<AudioWorkletNode | null>(null)
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const sinkRef = useRef<GainNode | null>(null)
 
   const toBase64 = (pcm: Int16Array): string => {
     const bytes = new Uint8Array(pcm.buffer)
@@ -25,23 +26,31 @@ export function useVoiceCapture(onChunk: (base64: string) => void): {
 
     const context = new AudioContext({ sampleRate: 16000 })
     contextRef.current = context
+    await context.resume()
 
     const source = context.createMediaStreamSource(stream)
     sourceRef.current = source
 
     try {
-      await context.audioWorklet.addModule('/src/worklets/pcm-processor.js')
+      await context.audioWorklet.addModule(new URL('../worklets/pcm-processor.js', import.meta.url))
       const worklet = new AudioWorkletNode(context, 'pcm-processor')
       workletRef.current = worklet
+      const sink = context.createGain()
+      sink.gain.value = 0
+      sinkRef.current = sink
       worklet.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
         onChunk(toBase64(new Int16Array(event.data)))
       }
       source.connect(worklet)
-      worklet.connect(context.destination)
+      worklet.connect(sink)
+      sink.connect(context.destination)
     } catch {
       // Fallback path for browsers where AudioWorklet fails to load.
       const processor = context.createScriptProcessor(4096, 1, 1)
       processorRef.current = processor
+      const sink = context.createGain()
+      sink.gain.value = 0
+      sinkRef.current = sink
       processor.onaudioprocess = (evt: AudioProcessingEvent) => {
         const channel = evt.inputBuffer.getChannelData(0)
         const pcm = new Int16Array(channel.length)
@@ -52,13 +61,15 @@ export function useVoiceCapture(onChunk: (base64: string) => void): {
         onChunk(toBase64(pcm))
       }
       source.connect(processor)
-      processor.connect(context.destination)
+      processor.connect(sink)
+      sink.connect(context.destination)
     }
   }
 
   const stop = () => {
     workletRef.current?.disconnect()
     processorRef.current?.disconnect()
+    sinkRef.current?.disconnect()
     sourceRef.current?.disconnect()
     streamRef.current?.getTracks().forEach((track) => track.stop())
     void contextRef.current?.close()

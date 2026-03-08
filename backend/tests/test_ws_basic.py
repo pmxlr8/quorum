@@ -10,6 +10,17 @@ def test_websocket_text_flow() -> None:
         assert first['type'] == 'meeting_status'
 
         ws.send_json({'type': 'text', 'text': 'hello board'})
-        msg = ws.receive_json()
-        assert msg['type'] == 'transcript_update'
-        assert 'hello board' in msg['payload']['text']
+        seen_speaking = False
+        seen_transcript = False
+
+        for _ in range(5):
+            event = ws.receive_json()
+            if event['type'] == 'agent_speaking':
+                seen_speaking = True
+            if event['type'] == 'transcript_update':
+                seen_transcript = True
+            if seen_speaking and seen_transcript:
+                break
+
+        assert seen_speaking
+        assert seen_transcript

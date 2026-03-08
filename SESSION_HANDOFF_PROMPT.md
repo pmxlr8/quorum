@@ -25,22 +25,43 @@ Ship a deployable Live Agents-track demo on Google Cloud with:
 
 ## Current implementation status
 - Completed: INFRA-000, BACK-001, BACK-002, FRONT-001.
-- In progress: BACK-003 (currently using `backend/services/live_bridge.py` stub), FRONT-002 (AudioWorklet path in place, tune and harden).
-- Not started: BACK-004 onward and FRONT-003 onward.
+- Completed: BACK-003 baseline Gemini Live integration with robust fallback and startup-failure handling.
+- Completed: FRONT-003 baseline and major UX pass (status diagnostics strip, mission card, improved controls/transcript).
+- In progress: BACK-004 (routing baseline), FRONT-004 (raise-hand/event richness), BACK-005 (callback/state richness).
+- Not started: BACK-006+ / FRONT-005+ document and vote persistence lanes.
 
 ## Existing code map
 - Backend entry: `backend/api/main.py`
 - WebSocket endpoint: `backend/api/ws.py`
 - Session manager: `backend/services/session_manager.py`
 - Live bridge stub (must replace): `backend/services/live_bridge.py`
+- Live bridge implementation: `backend/services/live_bridge.py`
 - Event schemas: `backend/models/events.py`
 - Backend tests: `backend/tests/`
 - Frontend app: `frontend/src/app/App.tsx`
+- Frontend styles/theme: `frontend/src/app/warroom.css`
 - WS store: `frontend/src/store/wsStore.ts`
 - Voice capture: `frontend/src/hooks/useVoiceCapture.ts`
 - Audio playback: `frontend/src/hooks/useAudioPlayer.ts`
 - Audio worklet: `frontend/src/worklets/pcm-processor.js`
 - Deploy script: `infra/deploy_cloud_run.sh`
+
+## Current runtime truth (as of 2026-03-08)
+- Vertex configuration is wired and read from `backend/.env` (and fallback `.env`).
+- Health endpoint now reports runtime auth/model info:
+  - `live_client_ready`, `auth_mode`, `project`, `location`.
+- Local frontend should use:
+  - `VITE_API_BASE_URL=http://127.0.0.1:8000`
+  - `VITE_WS_BASE_URL=ws://127.0.0.1:8000`
+- Default Live model updated to:
+  - `gemini-live-2.5-flash-native-audio`
+
+## Known resolved issues
+- WS send race fixed via outbound queue in frontend store.
+- Duplicate dev-mount behavior reduced by removing `React.StrictMode` in frontend boot.
+- Audio replay queue duplication fixed (`useAudioPlayer` now processes only new chunks).
+- Mic transcript spam in fallback mode removed (stub audio no longer emits per-chunk transcript).
+- WS startup no longer crashes app when Live connect fails; app falls back with clear system message.
 
 ## Non-negotiable contracts
 - Voice input contract: PCM16 mono 16kHz, base64 over WS event `{type:"audio",data:"..."}`
@@ -50,12 +71,11 @@ Ship a deployable Live Agents-track demo on Google Cloud with:
 - Keep session_state transient and minimal
 
 ## Required next implementation steps (strict order)
-1. Finish BACK-003 by replacing stub bridge with real ADK/Gemini Live runner.
-2. Keep BACK-003 tests green + add one integration test for audio event parsing.
-3. Implement BACK-004 orchestrator + 3 board agents with deterministic routing baseline.
-4. Implement FRONT-003 war-room layout and bind to existing WS events.
-5. Implement FRONT-004 raise-hand + transcript UX.
-6. Then proceed to BACK-006/007 (upload+analysis), BACK-008 (vote), FRONT-005/006.
+1. Continue BACK-004 from deterministic routing baseline to full ADK orchestrator + board-agent transfer behavior.
+2. Implement BACK-005 callback-driven transcript state + raise-hand events.
+3. Complete FRONT-004 raise-hand UX and explicit event controls in UI.
+4. Start BACK-006/007 document ingest + analysis lane.
+5. Then proceed to BACK-008 + FRONT-006 voting loop.
 
 ## Testing requirements every task
 - Backend: `source backend/.venv/bin/activate && pytest -q backend/tests`
@@ -64,7 +84,7 @@ Ship a deployable Live Agents-track demo on Google Cloud with:
 
 ## Cloud setup and billing mode
 - Use Vertex mode for hackathon credits:
-  - `AUTH_MODE=vertex`
+  - `GOOGLE_GENAI_USE_VERTEXAI=true`
   - no API key required for deploy path
 - Project ID from hackathon init:
   - `gcloud-hackathon-3xfig8zhh2usd`
@@ -86,4 +106,3 @@ Ship a deployable Live Agents-track demo on Google Cloud with:
 - Add a decision doc in `decision-docs/` using template.
 - Log blocker and fallback in `progress/progress.txt`.
 - Never silently change contracts.
-

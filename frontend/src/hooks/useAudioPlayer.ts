@@ -4,6 +4,7 @@ export function useAudioPlayer(base64PcmChunks: string[]): void {
   const contextRef = useRef<AudioContext | null>(null)
   const queueRef = useRef<Float32Array[]>([])
   const playingRef = useRef(false)
+  const processedChunksRef = useRef(0)
 
   useEffect(() => {
     if (!contextRef.current) {
@@ -12,7 +13,8 @@ export function useAudioPlayer(base64PcmChunks: string[]): void {
   }, [])
 
   useEffect(() => {
-    for (const chunk of base64PcmChunks) {
+    for (let idx = processedChunksRef.current; idx < base64PcmChunks.length; idx += 1) {
+      const chunk = base64PcmChunks[idx]
       const bytes = Uint8Array.from(atob(chunk), (ch) => ch.charCodeAt(0))
       const pcm = new Int16Array(bytes.buffer)
       const float = new Float32Array(pcm.length)
@@ -21,6 +23,7 @@ export function useAudioPlayer(base64PcmChunks: string[]): void {
       }
       queueRef.current.push(float)
     }
+    processedChunksRef.current = base64PcmChunks.length
 
     const playNext = () => {
       if (playingRef.current) return

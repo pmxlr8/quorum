@@ -11,6 +11,8 @@ frontend/tsconfig.tsbuildinfo
 # Env
 .env
 *.env
+.env.local
+frontend/.env.local
 
 # OS
 .DS_Store

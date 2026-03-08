@@ -31,12 +31,13 @@ BACK-002 (P0)
   - per-session queue and graceful disconnect cleanup
 
 BACK-003 (P0)
-- Status: in_progress
+- Status: done
 - Dependencies: BACK-002
 - Acceptance Criteria:
-  - Live runner wired with `LIVE_MODEL_ID`
+  - Live runner wired with `LIVE_MODEL_ID` (`gemini-live-2.5-flash-native-audio` default)
   - inbound PCM16 audio events forwarded correctly
   - output audio events streamed to client
+  - startup failures degrade gracefully to demo mode without WS crash
 
 FRONT-001 (P0)
 - Status: done
@@ -46,7 +47,7 @@ FRONT-001 (P0)
   - WS client store with reconnect
 
 FRONT-002 (P0)
-- Status: in_progress
+- Status: done
 - Dependencies: FRONT-001, BACK-003
 - Acceptance Criteria:
   - AudioWorklet PCM capture in 100ms chunks
@@ -56,7 +57,7 @@ FRONT-002 (P0)
 ## Phase 2 - Multi-Agent Meeting Loop
 
 BACK-004 (P0)
-- Status: pending
+- Status: in_progress
 - Dependencies: BACK-003
 - Acceptance Criteria:
   - orchestrator + 3 board agents configured
@@ -70,14 +71,14 @@ BACK-005 (P0)
   - raise-hand events generated and broadcast
 
 FRONT-003 (P0)
-- Status: pending
+- Status: done
 - Dependencies: FRONT-001
 - Acceptance Criteria:
   - 3-panel war-room layout renders
   - per-agent state: idle/speaking/raised/away
 
 FRONT-004 (P0)
-- Status: pending
+- Status: in_progress
 - Dependencies: FRONT-003, BACK-005
 - Acceptance Criteria:
   - raise-hand banner + grant turn interaction

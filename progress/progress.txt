@@ -175,3 +175,176 @@ Next Tasks:
 - BACK-004 orchestrator/agents
 
 ---
+### Session 4 - 2026-03-08 08:55 EST
+Completed Tasks:
+- BACK-003: Replaced local stub bridge with real Gemini Live session manager integration (with auth fallback).
+- BACK-004 (partial): Added orchestrator routing baseline for CTO/CFO/Legal turn selection in WS text flow.
+- Added routing unit tests.
+
+Tech Notes:
+- `backend/services/live_bridge.py` now opens/closes per-session Live connections and streams parsed audio/transcription events.
+- If no auth mode is configured, bridge falls back to deterministic local stub behavior (keeps tests and local wiring stable).
+- WS text handling now emits `agent_speaking` before routed model response.
+
+Test Evidence:
+- Command: `source backend/.venv/bin/activate && pytest -q backend/tests`
+- Input: backend tests including health, websocket flow, orchestrator routing
+- Expected: all pass with new event order
+- Actual: `5 passed in 0.54s`
+- Result: pass
+
+- Command: `cd frontend && npm run build`
+- Input: frontend TS no-emit typecheck + bundle
+- Expected: build success
+- Actual: build succeeded (Vite output generated)
+- Result: pass
+
+Files Touched:
+- backend/core/config.py
+- backend/services/live_bridge.py
+- backend/services/orchestrator.py
+- backend/api/ws.py
+- backend/tests/test_orchestrator.py
+- backend/tests/test_ws_basic.py
+- prd/tasks-war-room.md
+- SESSION_HANDOFF_PROMPT.md
+
+Next Tasks:
+- BACK-004: expand from keyword routing to ADK orchestrator+subagent behavior
+- BACK-005: callbacks/transcript + raise-hand signal path
+- FRONT-003: war room layout
+
+---
+### Session 5 - 2026-03-08 09:10 EST
+Completed Tasks:
+- FRONT-003: Built advanced animated 3-panel war-room UI with Framer Motion.
+- FRONT-004 (partial): Live transcript panel and active-speaker visual state integration.
+
+Tech Notes:
+- Added Framer Motion and replaced minimal UI with intentional, high-contrast war-room visual language.
+- Added animated mic orb, staggered transcript entries, animated speaking card accents, and responsive panel collapse.
+- WS store now records event log entries with stable IDs (`id`, `at`, `event`) to avoid index-based rendering keys.
+
+Test Evidence:
+- Command: `cd frontend && npm run build`
+- Input: full TypeScript check + Vite production build
+- Expected: build success after Framer Motion integration
+- Actual: build succeeded (`434 modules transformed`)
+- Result: pass
+
+- Command: `source backend/.venv/bin/activate && pytest -q backend/tests`
+- Input: backend test suite
+- Expected: no regressions from frontend/state contract changes
+- Actual: `5 passed in 0.66s`
+- Result: pass
+
+Files Touched:
+- frontend/package.json
+- frontend/package-lock.json
+- frontend/src/store/wsStore.ts
+- frontend/src/app/App.tsx
+- frontend/src/app/warroom.css
+- SESSION_HANDOFF_PROMPT.md
+- prd/tasks-war-room.md
+- progress/progress.txt
+
+Next Tasks:
+- FRONT-004: add explicit hand_raised banner + urgent animation states
+- BACK-005: callback/event path for raise-hand and transcript-state updates
+- BACK-004: evolve orchestrator routing to full ADK multi-agent behavior
+
+---
+### Session 6 - 2026-03-08 09:20 EST
+Completed Tasks:
+- Added regression/edge-case tests for live bridge fallback and websocket error/vote paths.
+- Added high-impact workflow skills for round quality gates, regression sweeps, and human acceptance runs.
+
+Tech Notes:
+- Backend test coverage expanded from 5 to 9 tests.
+- Round quality gate currently green for backend tests and frontend production build.
+
+Test Evidence:
+- Command: `source backend/.venv/bin/activate && pytest -q backend/tests`
+- Input: full backend suite (health/ws/routing/live-edge tests)
+- Expected: all tests pass
+- Actual: `9 passed in 0.66s`
+- Result: pass
+
+- Command: `cd frontend && npm run build`
+- Input: frontend strict TS + Vite production build
+- Expected: build success
+- Actual: build succeeded (`434 modules transformed`)
+- Result: pass
+
+Files Touched:
+- backend/tests/test_live_bridge.py
+- backend/tests/test_ws_edge_cases.py
+- skills/round-quality-gate/SKILL.md
+- skills/regression-sweeper/SKILL.md
+- skills/human-acceptance-runner/SKILL.md
+- progress/progress.txt
+
+Next Tasks:
+- FRONT-004 complete: explicit hand_raised and urgent banners/animation paths
+- BACK-005: callback-driven raise-hand + transcript state update flow
+- BACK-004 refinement: ADK-based routing/tool transfer behavior
+
+---
+### Session 7 - 2026-03-08 10:40 EST
+Completed Tasks:
+- Stabilized Vertex/live-mode bring-up path for local demo execution.
+- Added backend runtime diagnostics to `/health` and frontend status telemetry strip.
+- Fixed Live websocket startup crash path (policy/model failures now degrade gracefully to demo mode).
+- Updated default Live model ID to `gemini-live-2.5-flash-native-audio`.
+- Hardened websocket tests for startup notice ordering and event framing.
+- Refreshed handoff prompt + README Vertex setup instructions for teammate continuity.
+
+Tech Notes:
+- Root-cause for repeated hard failures was invalid Live model string in env/default (`...preview-12-2025`) causing policy violation 1008 on connect.
+- Backend config now reads env from both `backend/.env` and `.env`, preventing root-run mismatch where local env was silently ignored.
+- Frontend now surfaces auth mode/project/model/runtime readiness and explicit demo/live mode cues.
+
+Test Evidence:
+- Command: `source backend/.venv/bin/activate && pytest backend/tests/test_ws_basic.py backend/tests/test_health.py -q`
+- Input: websocket + health diagnostics behavior after startup fallback and health payload updates
+- Expected: tests pass with new startup event ordering and health shape
+- Actual: `2 passed in 1.06s`
+- Result: pass
+
+- Command: `source backend/.venv/bin/activate && pytest backend/tests/test_ws_basic.py backend/tests/test_live_bridge.py backend/tests/test_health.py -q`
+- Input: routing/live bridge/health regression check
+- Expected: tests pass
+- Actual: `4 passed in 0.55s`
+- Result: pass
+
+- Command: `cd frontend && npm run build`
+- Input: full TypeScript no-emit + Vite bundle with diagnostics UI and ws reliability updates
+- Expected: build success
+- Actual: build succeeded (`434 modules transformed`)
+- Result: pass
+
+Files Touched:
+- backend/core/config.py
+- backend/.env.example
+- backend/api/main.py
+- backend/api/ws.py
+- backend/services/live_bridge.py
+- backend/tests/test_ws_basic.py
+- backend/tests/test_ws_edge_cases.py
+- frontend/src/main.tsx
+- frontend/src/store/wsStore.ts
+- frontend/src/hooks/useAudioPlayer.ts
+- frontend/src/hooks/useVoiceCapture.ts
+- frontend/src/app/App.tsx
+- frontend/src/app/warroom.css
+- README.md
+- SESSION_HANDOFF_PROMPT.md
+- progress/progress.txt
+
+Next Tasks:
+- BACK-004: migrate deterministic route logic to ADK orchestrator transfer loop
+- BACK-005: raise-hand callback emission and transcript-state signal path
+- FRONT-004: explicit raise-hand UI controls + urgency visuals
+- BACK-006/007: document upload + summarize tool lane
+
+---
