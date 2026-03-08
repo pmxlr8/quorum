@@ -1,7 +1,7 @@
 # Team Members
-Anzhelika Siui
-Bhavesh Gupta
-Pranjal Mishra
+Anzhelika Siui,
+Bhavesh Gupta,
+Pranjal Mishra,
 Aru Koshkarova
 
 
