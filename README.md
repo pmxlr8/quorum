@@ -5,7 +5,8 @@ Pranjal Mishra,
 Aru Koshkarova
 
 <p align="center">
-  <video src="https://github.com/pmxlr8/quorum/blob/main/COlumbiaXStrangerThings.mp4" width="80%" controls></video>
+  <video src="[https://github.com/pmxlr8/quorum/blob/main/COlumbiaXStrangerThings.mp4](https://github.com/user-attachments/assets/859162e9-d9b1-4a9c-b1ff-45e79941e457
+)" width="80%" controls></video>
 </p>
 
 
@@ -17,6 +18,9 @@ Monorepo:
 - `infra/` Cloud Run deployment scripts and cloud build configs
 
 ## Local Run
+
+
+
 
 Backend:
 ```bash
