@@ -5,8 +5,12 @@ Pranjal Mishra,
 Aru Koshkarova
 
 
-https://www.youtube.com/watch?v=MSZcMDbuw8k
-
+<div align="center">
+  <a href="https://www.youtube.com/watch?v=MSZcMDbuw8k">
+    <img src="https://img.youtube.com/vi/MSZcMDbuw8k/maxresdefault.jpg" alt="Watch Quorum Demo" style="width:100%;">
+    <p>▶️ <b>Click to watch the Quorum Demo: AI Agent Collaboration</b></p>
+  </a>
+</div>
 
 # Virtual War Room
 
