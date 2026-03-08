@@ -4,14 +4,19 @@ set -euo pipefail
 PROJECT_ID="${PROJECT_ID:-}"
 REGION="${REGION:-us-central1}"
 LIVE_MODEL_ID="${LIVE_MODEL_ID:-gemini-2.5-flash-native-audio-preview-12-2025}"
+AUTH_MODE="${AUTH_MODE:-vertex}" # vertex | devapi
 GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"
 
 if [[ -z "$PROJECT_ID" ]]; then
   echo "PROJECT_ID is required"
   exit 1
 fi
-if [[ -z "$GOOGLE_API_KEY" ]]; then
-  echo "GOOGLE_API_KEY is required"
+if [[ "$AUTH_MODE" != "vertex" && "$AUTH_MODE" != "devapi" ]]; then
+  echo "AUTH_MODE must be 'vertex' or 'devapi'"
+  exit 1
+fi
+if [[ "$AUTH_MODE" == "devapi" && -z "$GOOGLE_API_KEY" ]]; then
+  echo "GOOGLE_API_KEY is required for AUTH_MODE=devapi"
   exit 1
 fi
 
@@ -29,7 +34,7 @@ gcloud run deploy warroom-backend \
   --platform managed \
   --allow-unauthenticated \
   --session-affinity \
-  --set-env-vars "LIVE_MODEL_ID=${LIVE_MODEL_ID},GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${REGION},GOOGLE_API_KEY=${GOOGLE_API_KEY}"
+  --set-env-vars "LIVE_MODEL_ID=${LIVE_MODEL_ID},GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${REGION},GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=$([[ "$AUTH_MODE" == "vertex" ]] && echo true || echo false),GOOGLE_API_KEY=${GOOGLE_API_KEY}"
 
 BACKEND_URL="$(gcloud run services describe warroom-backend --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
 BACKEND_WS_URL="${BACKEND_URL/https:/wss:}"

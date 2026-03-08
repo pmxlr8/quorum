@@ -12,8 +12,10 @@ Enable in your GCP project:
 ## 2) Required Auth/Secrets
 You need:
 - `PROJECT_ID`
-- `GOOGLE_API_KEY` (Gemini API key)
 - `gcloud auth login` and `gcloud auth application-default login`
+- Auth mode:
+  - Recommended: `AUTH_MODE=vertex` (uses GCP project billing credits, no API key required)
+  - Optional: `AUTH_MODE=devapi` + `GOOGLE_API_KEY`
 
 ## 3) One-time setup commands
 ```bash
@@ -26,7 +28,9 @@ gcloud services enable \
 ## 4) Deploy
 ```bash
 cd infra
-PROJECT_ID=<your-project-id> GOOGLE_API_KEY=<your-key> ./deploy_cloud_run.sh
+PROJECT_ID=<your-project-id> AUTH_MODE=vertex ./deploy_cloud_run.sh
+# or, if using Gemini Developer API key mode:
+# PROJECT_ID=<your-project-id> AUTH_MODE=devapi GOOGLE_API_KEY=<your-key> ./deploy_cloud_run.sh
 ```
 
 ## 5) Verify
@@ -38,3 +42,7 @@ Expected keys: `status`, `version`, `live_model_id`.
 ## 6) Notes
 - Current backend live bridge is scaffolded for wiring. Replace with full ADK runner in BACK-003 completion pass.
 - Session affinity is enabled for demo stability.
+- Vertex mode env vars set on backend service:
+  - `GOOGLE_GENAI_USE_VERTEXAI=true`
+  - `GOOGLE_CLOUD_PROJECT=<PROJECT_ID>`
+  - `GOOGLE_CLOUD_LOCATION=<REGION>`
