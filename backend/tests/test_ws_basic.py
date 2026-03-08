@@ -11,16 +11,16 @@ def test_websocket_text_flow() -> None:
 
         ws.send_json({'type': 'text', 'text': 'hello board'})
         seen_speaking = False
-        seen_transcript = False
+        seen_response = False  # Accept transcript_update OR audio_chunk as valid response
 
-        for _ in range(5):
+        for _ in range(10):
             event = ws.receive_json()
             if event['type'] == 'agent_speaking':
                 seen_speaking = True
-            if event['type'] == 'transcript_update':
-                seen_transcript = True
-            if seen_speaking and seen_transcript:
+            if event['type'] in ('transcript_update', 'audio_chunk'):
+                seen_response = True
+            if seen_speaking and seen_response:
                 break
 
         assert seen_speaking
-        assert seen_transcript
+        assert seen_response

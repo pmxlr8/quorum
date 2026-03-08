@@ -1,29 +1,32 @@
 import { useEffect, useRef } from 'react'
 
-export function useAudioPlayer(base64PcmChunks: string[]): void {
+type AudioChunkInfo = { data: string; sampleRate: number }
+
+export function useAudioPlayer(chunks: AudioChunkInfo[]): void {
   const contextRef = useRef<AudioContext | null>(null)
-  const queueRef = useRef<Float32Array[]>([])
+  const queueRef = useRef<{ float: Float32Array; rate: number }[]>([])
   const playingRef = useRef(false)
-  const processedChunksRef = useRef(0)
+  const processedRef = useRef(0)
 
   useEffect(() => {
     if (!contextRef.current) {
-      contextRef.current = new AudioContext({ sampleRate: 16000 })
+      // Default to 24000 — Gemini Live output rate
+      contextRef.current = new AudioContext({ sampleRate: 24000 })
     }
   }, [])
 
   useEffect(() => {
-    for (let idx = processedChunksRef.current; idx < base64PcmChunks.length; idx += 1) {
-      const chunk = base64PcmChunks[idx]
-      const bytes = Uint8Array.from(atob(chunk), (ch) => ch.charCodeAt(0))
+    for (let idx = processedRef.current; idx < chunks.length; idx += 1) {
+      const { data, sampleRate } = chunks[idx]
+      const bytes = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0))
       const pcm = new Int16Array(bytes.buffer)
       const float = new Float32Array(pcm.length)
       for (let i = 0; i < pcm.length; i += 1) {
         float[i] = pcm[i] / 32768
       }
-      queueRef.current.push(float)
+      queueRef.current.push({ float, rate: sampleRate })
     }
-    processedChunksRef.current = base64PcmChunks.length
+    processedRef.current = chunks.length
 
     const playNext = () => {
       if (playingRef.current) return
@@ -33,8 +36,8 @@ export function useAudioPlayer(base64PcmChunks: string[]): void {
       if (!next) return
 
       playingRef.current = true
-      const buffer = ctx.createBuffer(1, next.length, 16000)
-      buffer.getChannelData(0).set(next)
+      const buffer = ctx.createBuffer(1, next.float.length, next.rate)
+      buffer.getChannelData(0).set(next.float)
 
       const src = ctx.createBufferSource()
       src.buffer = buffer
@@ -47,5 +50,5 @@ export function useAudioPlayer(base64PcmChunks: string[]): void {
     }
 
     playNext()
-  }, [base64PcmChunks])
+  }, [chunks])
 }

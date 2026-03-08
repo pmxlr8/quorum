@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { useAudioPlayer } from '../hooks/useAudioPlayer'
 import { useVoiceCapture } from '../hooks/useVoiceCapture'
@@ -13,7 +13,9 @@ type AgentView = {
   id: AgentId
   name: string
   role: string
-  status: 'idle' | 'speaking'
+  initials: string
+  color: string
+  status: 'idle' | 'speaking' | 'thinking'
 }
 
 type HealthInfo = {
@@ -26,12 +28,31 @@ type HealthInfo = {
   location: string | null
 }
 
-const baseAgents: AgentView[] = [
-  { id: 'alex_chen', name: 'Alex Chen', role: 'CTO', status: 'idle' },
-  { id: 'sarah_kim', name: 'Sarah Kim', role: 'CFO', status: 'idle' },
-  { id: 'marcus_webb', name: 'Marcus Webb', role: 'Legal', status: 'idle' },
-  { id: 'charon_orchestrator', name: 'Charon', role: 'Orchestrator', status: 'idle' },
-]
+const AGENT_MAP: Record<AgentId, AgentView> = {
+  alex_chen: { id: 'alex_chen', name: 'Alex Chen', role: 'CTO', initials: 'AC', color: '#4cc9f0', status: 'idle' },
+  sarah_kim: { id: 'sarah_kim', name: 'Sarah Kim', role: 'CFO', initials: 'SK', color: '#ffd166', status: 'idle' },
+  marcus_webb: { id: 'marcus_webb', name: 'Marcus Webb', role: 'Legal', initials: 'MW', color: '#ff6b6b', status: 'idle' },
+  charon_orchestrator: { id: 'charon_orchestrator', name: 'Charon', role: 'Facilitator', initials: 'CH', color: '#20c997', status: 'idle' },
+}
+
+function parseSampleRate(mime: string | undefined): number {
+  if (!mime) return 24000
+  const match = mime.match(/rate=(\d+)/)
+  return match ? parseInt(match[1], 10) : 24000
+}
+
+function mapSpeakerToAgent(speaker: string): { name: string; color: string } {
+  if (speaker === 'you' || speaker === 'user') return { name: 'You', color: '#a78bfa' }
+  if (speaker === 'system') return { name: 'System', color: '#6b7280' }
+  if (speaker === 'assistant' || speaker === 'orchestrator') return { name: 'AI Board', color: '#20c997' }
+  // Match against known agents
+  for (const a of Object.values(AGENT_MAP)) {
+    if (speaker.toLowerCase().includes(a.id) || speaker.toLowerCase().includes(a.name.toLowerCase())) {
+      return { name: a.name, color: a.color }
+    }
+  }
+  return { name: speaker, color: '#9eb1cf' }
+}
 
 function extractTranscript(event: ServerEvent): { speaker: string; text: string } | null {
   if (event.type === 'transcript_update') {
@@ -43,10 +64,6 @@ function extractTranscript(event: ServerEvent): { speaker: string; text: string 
   return null
 }
 
-function isAgentSpeaking(event: ServerEvent): event is Extract<ServerEvent, { type: 'agent_speaking' }> {
-  return event.type === 'agent_speaking'
-}
-
 export function App() {
   const { connect, disconnect, send, events, connected } = useWsStore()
   const [sessionId] = useState('local-session')
@@ -54,7 +71,7 @@ export function App() {
   const [prompt, setPrompt] = useState('')
   const [localTranscript, setLocalTranscript] = useState<Array<{ id: string; at: number; speaker: string; text: string }>>([])
   const [health, setHealth] = useState<HealthInfo | null>(null)
-  const [healthError, setHealthError] = useState<string | null>(null)
+  const transcriptEndRef = useRef<HTMLDivElement>(null)
 
   const httpBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
@@ -68,37 +85,29 @@ export function App() {
     const loadHealth = async () => {
       try {
         const response = await fetch(`${httpBase}/health`)
-        if (!response.ok) {
-          throw new Error(`Health check failed: ${response.status}`)
+        if (response.ok) {
+          const data = (await response.json()) as HealthInfo
+          if (alive) setHealth(data)
         }
-        const data = (await response.json()) as HealthInfo
-        if (alive) {
-          setHealth(data)
-          setHealthError(null)
-        }
-      } catch (error) {
-        if (alive) {
-          const detail = error instanceof Error ? error.message : 'Unknown health error'
-          setHealthError(detail)
-        }
-      }
+      } catch { /* silent */ }
     }
     void loadHealth()
-    const timer = setInterval(() => {
-      void loadHealth()
-    }, 5000)
-    return () => {
-      alive = false
-      clearInterval(timer)
-    }
+    const timer = setInterval(() => void loadHealth(), 10000)
+    return () => { alive = false; clearInterval(timer) }
   }, [httpBase])
 
   const audioChunks = useMemo(
     () =>
       events
         .filter((entry) => entry.event.type === 'audio_chunk')
-        .map((entry) => (entry.event.type === 'audio_chunk' ? entry.event.payload.data : ''))
-        .filter(Boolean),
+        .map((entry) => {
+          if (entry.event.type !== 'audio_chunk') return { data: '', sampleRate: 24000 }
+          return {
+            data: entry.event.payload.data,
+            sampleRate: parseSampleRate(entry.event.payload.mime),
+          }
+        })
+        .filter((c) => c.data),
     [events],
   )
 
@@ -110,28 +119,51 @@ export function App() {
     [events],
   )
 
-  const mergedTranscript = useMemo(
-    () =>
-      [...transcript.map((entry) => ({ ...entry.data, id: entry.id, at: entry.at })), ...localTranscript]
-        .sort((a, b) => a.at - b.at)
-        .slice(-40),
-    [localTranscript, transcript],
-  )
+  const mergedTranscript = useMemo(() => {
+    const sorted = [...transcript.map((entry) => ({ ...entry.data, id: entry.id, at: entry.at })), ...localTranscript]
+      .sort((a, b) => a.at - b.at)
+      .slice(-80)
 
-  const agents = useMemo(() => {
-    const next = baseAgents.map((a) => ({ ...a }))
-    const speaking = [...events].reverse().map((entry) => entry.event).find(isAgentSpeaking)
-
-    if (speaking) {
-      const agent = next.find((a) => a.id === speaking.payload.agent)
-      if (agent) {
-        agent.status = 'speaking'
+    // Merge consecutive entries from the same speaker
+    const merged: typeof sorted = []
+    for (const entry of sorted) {
+      const prev = merged[merged.length - 1]
+      if (prev && prev.speaker === entry.speaker && entry.at - prev.at < 30000) {
+        // Same speaker within 30s — append text
+        prev.text = prev.text + ' ' + entry.text
+        prev.id = entry.id // Use latest id for React key stability
+      } else {
+        merged.push({ ...entry })
       }
     }
-    return next
+    return merged.slice(-50)
+  }, [localTranscript, transcript])
+
+  // Find which agent is currently speaking — reset on turn_complete
+  const currentSpeaker = useMemo(() => {
+    // Walk events from newest to oldest. If we hit turn_complete before agent_speaking, no one is speaking.
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i].event
+      if (ev.type === 'turn_complete') return null
+      if (ev.type === 'agent_speaking') return ev.payload.agent as AgentId
+    }
+    return null
   }, [events])
 
+  const agents = useMemo(() =>
+    Object.values(AGENT_MAP).map((a) => ({
+      ...a,
+      status: (currentSpeaker === a.id ? 'speaking' : 'idle') as AgentView['status'],
+    })),
+    [currentSpeaker],
+  )
+
   useAudioPlayer(audioChunks)
+
+  // Auto-scroll transcript
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [mergedTranscript])
 
   const addLocalEntry = (speaker: string, text: string) => {
     setLocalTranscript((entries) => [
@@ -149,175 +181,202 @@ export function App() {
 
   const voice = useVoiceCapture((data) => send({ type: 'audio', data }))
 
+  const liveMode = health?.live_client_ready ?? false
+
   return (
     <main className="warroom-root">
-      <motion.header className="topbar" initial={{ y: -12, opacity: 0 }} animate={{ y: 0, opacity: 1 }}>
+      {/* ──── Header ──── */}
+      <header className="topbar">
         <div className="title-wrap">
-          <h1 className="title">THE WAR ROOM</h1>
-          <span className="pill">BOARD DECISION SIM</span>
+          <div className="logo-icon">⚡</div>
+          <div>
+            <h1 className="title">Virtual War Room</h1>
+            <span className="subtitle">AI Board of Directors</span>
+          </div>
         </div>
         <div className="topbar-right">
-          <div className={`pill mode-pill ${health?.live_client_ready ? 'live' : 'demo'}`}>
-            {health?.live_client_ready ? 'LIVE MODEL READY' : 'DEMO MODE'}
+          <div className={`status-chip ${liveMode ? 'live' : 'demo'}`}>
+            <span className={`dot ${liveMode ? 'green' : 'amber'}`} />
+            {liveMode ? 'LIVE' : 'DEMO'}
           </div>
-          <div className="pill">
-            <span className={`live-dot ${connected ? 'on' : ''}`} />
-            {connected ? 'CONNECTED' : 'DISCONNECTED'}
+          <div className={`status-chip ${connected ? 'connected' : 'disconnected'}`}>
+            <span className={`dot ${connected ? 'green' : 'red'}`} />
+            {connected ? 'Connected' : 'Offline'}
           </div>
         </div>
-      </motion.header>
+      </header>
 
-      <motion.section className="status-grid" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}>
-        <article className="status-tile">
-          <span className="status-k">Auth</span>
-          <span className="status-v">{health?.auth_mode ?? 'unknown'}</span>
-        </article>
-        <article className="status-tile">
-          <span className="status-k">Model</span>
-          <span className="status-v">{health?.live_model_id ?? 'unavailable'}</span>
-        </article>
-        <article className="status-tile">
-          <span className="status-k">Project</span>
-          <span className="status-v">{health?.project ?? 'not set'}</span>
-        </article>
-        <article className="status-tile">
-          <span className="status-k">Region</span>
-          <span className="status-v">{health?.location ?? 'not set'}</span>
-        </article>
-      </motion.section>
-
-      {healthError ? <div className="warn-banner">Health check error: {healthError}</div> : null}
-      {health && !health.live_client_ready ? (
-        <div className="warn-banner">
-          Live auth is not configured. Text uses local demo fallback; microphone will not produce real model responses.
-        </div>
-      ) : null}
-
-      <section className="mission">
-        <div className="mission-title">Current Mission</div>
-        <div className="mission-text">Decide the next product milestone with clear Decision, Risks, and Owner outputs for the executive board.</div>
+      {/* ──── Mission Banner ──── */}
+      <section className="mission-bar">
+        <span className="mission-label">AGENDA</span>
+        <span className="mission-text">Decide the next product milestone — deliver clear Decision, Risks, and Owner.</span>
       </section>
 
+      {/* ──── Main Layout ──── */}
       <section className="layout">
-        <motion.aside className="panel" initial={{ opacity: 0, x: -18 }} animate={{ opacity: 1, x: 0 }}>
-          <div className="panel-head">BOARD MEMBERS</div>
-          <div className="panel-body agent-list">
+        {/* Left: Board Members */}
+        <aside className="panel board-panel">
+          <div className="panel-head">Board Members</div>
+          <div className="agent-list">
             {agents.map((agent) => (
-              <motion.article
+              <motion.div
                 key={agent.id}
+                className={`agent-card ${agent.status}`}
                 layout
-                className="agent-card"
                 animate={{
-                  borderColor: agent.status === 'speaking' ? 'rgba(28, 200, 255, 0.7)' : 'rgba(255,255,255,0.12)',
-                  boxShadow: agent.status === 'speaking' ? '0 0 0 1px rgba(28,200,255,.35), 0 0 26px rgba(28,200,255,.24)' : 'none',
+                  borderColor: agent.status === 'speaking' ? agent.color : 'rgba(255,255,255,0.08)',
                 }}
               >
-                <div className="agent-row">
-                  <div>
-                    <div className="agent-name">{agent.name}</div>
-                    <div className="agent-role">{agent.role}</div>
-                  </div>
-                  <span className="status-tag">{agent.status.toUpperCase()}</span>
+                <div className="agent-avatar" style={{ background: agent.color }}>
+                  {agent.initials}
                 </div>
-              </motion.article>
+                <div className="agent-info">
+                  <div className="agent-name">{agent.name}</div>
+                  <div className="agent-role">{agent.role}</div>
+                </div>
+                {agent.status === 'speaking' && (
+                  <motion.div
+                    className="speaking-indicator"
+                    animate={{ scale: [1, 1.3, 1] }}
+                    transition={{ repeat: Infinity, duration: 1 }}
+                  >
+                    <div className="wave-bar" />
+                    <div className="wave-bar" style={{ animationDelay: '0.15s' }} />
+                    <div className="wave-bar" style={{ animationDelay: '0.3s' }} />
+                  </motion.div>
+                )}
+                {agent.status === 'idle' && <span className="idle-tag">Ready</span>}
+              </motion.div>
             ))}
           </div>
-        </motion.aside>
 
-        <div className="center-stack">
-          <motion.section className="panel control-card" initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }}>
-            <div className="panel-head">VOICE COMMAND DECK</div>
-            <div className="panel-body control-grid">
-              <motion.button
-                className="mic-orb"
-                whileTap={{ scale: 0.93 }}
-                animate={isCapturing ? { boxShadow: ['0 0 0 0 rgba(46,229,157,.55)', '0 0 0 18px rgba(46,229,157,0)'] } : {}}
-                transition={{ repeat: isCapturing ? Number.POSITIVE_INFINITY : 0, duration: 1.2 }}
-                onClick={async () => {
-                  if (isCapturing) {
-                    voice.stop()
-                    send({ type: 'turn_complete' })
-                    setIsCapturing(false)
-                    addLocalEntry('you', '[voice] Turn complete.')
-                    return
-                  }
-                  try {
-                    setIsCapturing(true)
-                    await voice.start()
-                    addLocalEntry('you', '[voice] Listening...')
-                  } catch (error) {
-                    setIsCapturing(false)
-                    const detail = error instanceof Error ? error.message : 'Unknown microphone error'
-                    addLocalEntry('system', `Microphone failed to start: ${detail}`)
-                  }
-                }}
-              >
-                {isCapturing ? 'STOP MIC' : 'START MIC'}
-              </motion.button>
+          {/* Quick action buttons */}
+          <div className="quick-actions">
+            <button className="action-btn cto" onClick={() => sendUserText('What are the key technical risks and architecture concerns we should address?')}>
+              <span className="action-avatar" style={{ background: '#4cc9f0' }}>AC</span>
+              Ask CTO
+            </button>
+            <button className="action-btn cfo" onClick={() => sendUserText('What does the financial picture look like? Budget, runway, and ROI projections?')}>
+              <span className="action-avatar" style={{ background: '#ffd166' }}>SK</span>
+              Ask CFO
+            </button>
+            <button className="action-btn legal" onClick={() => sendUserText('Are there any legal risks, compliance concerns, or liability exposure here?')}>
+              <span className="action-avatar" style={{ background: '#ff6b6b' }}>MW</span>
+              Ask Legal
+            </button>
+          </div>
+        </aside>
 
-              <div>
-                <div className="controls">
-                  <button className="btn primary" onClick={() => sendUserText('Evaluate technical scalability risk for this quarter.')}>
-                    Ask CTO
-                  </button>
-                  <button className="btn" onClick={() => sendUserText('Assess budget, margin, and runway implications.')}>
-                    Ask CFO
-                  </button>
-                  <button className="btn" onClick={() => sendUserText('Check legal and compliance exposure in this plan.')}>
-                    Ask Legal
-                  </button>
+        {/* Center: Controls + Input */}
+        <div className="center-col">
+          {/* Mic Control */}
+          <div className="mic-section">
+            <motion.button
+              className={`mic-orb ${isCapturing ? 'active' : ''}`}
+              whileTap={{ scale: 0.95 }}
+              onClick={async () => {
+                if (isCapturing) {
+                  voice.stop()
+                  send({ type: 'turn_complete' })
+                  setIsCapturing(false)
+                  return
+                }
+                try {
+                  setIsCapturing(true)
+                  await voice.start()
+                  addLocalEntry('you', '🎙️ Listening...')
+                } catch (error) {
+                  setIsCapturing(false)
+                  const detail = error instanceof Error ? error.message : 'Microphone error'
+                  addLocalEntry('system', `Mic failed: ${detail}`)
+                }
+              }}
+            >
+              {isCapturing ? (
+                <div className="mic-icon recording">
+                  <div className="pulse-ring" />
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
                 </div>
-                <div className="prompt-row">
-                  <input
-                    className="prompt-input"
-                    value={prompt}
-                    onChange={(event) => setPrompt(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        sendUserText(prompt)
-                        setPrompt('')
-                      }
-                    }}
-                    placeholder="Type your own prompt and press Enter..."
-                  />
-                  <button
-                    className="btn send-btn"
-                    onClick={() => {
-                      sendUserText(prompt)
-                      setPrompt('')
-                    }}
-                  >
-                    Send
-                  </button>
+              ) : (
+                <div className="mic-icon">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                    <line x1="12" y1="19" x2="12" y2="23"/>
+                    <line x1="8" y1="23" x2="16" y2="23"/>
+                  </svg>
                 </div>
-              </div>
+              )}
+            </motion.button>
+            <div className="mic-label">{isCapturing ? 'Tap to stop' : 'Tap to speak'}</div>
+          </div>
+
+          {/* Text Input */}
+          <div className="input-section">
+            <input
+              className="chat-input"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && prompt.trim()) {
+                  sendUserText(prompt)
+                  setPrompt('')
+                }
+              }}
+              placeholder="Ask your board anything..."
+            />
+            <button
+              className="send-btn"
+              disabled={!prompt.trim()}
+              onClick={() => {
+                if (prompt.trim()) {
+                  sendUserText(prompt)
+                  setPrompt('')
+                }
+              }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
+            </button>
+          </div>
+
+          {!liveMode && (
+            <div className="demo-notice">
+              Demo mode — text responses use local AI. Voice requires Vertex AI credentials.
             </div>
-          </motion.section>
+          )}
         </div>
 
-        <motion.aside className="panel" initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }}>
-          <div className="panel-head">LIVE TRANSCRIPT</div>
-          <div className="panel-body transcript">
+        {/* Right: Transcript */}
+        <aside className="panel transcript-panel">
+          <div className="panel-head">Live Transcript</div>
+          <div className="transcript-body">
             <AnimatePresence initial={false}>
-              {mergedTranscript.map((entry) => (
-                <motion.article
-                  key={entry.id}
-                  className="msg"
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  layout
-                >
-                  <div className="msg-meta">
-                    <span>{entry.speaker}</span>
-                    <span>{new Date(entry.at).toLocaleTimeString()}</span>
-                  </div>
-                  <div className="msg-body">{entry.text}</div>
-                </motion.article>
-              ))}
+              {mergedTranscript.map((entry) => {
+                const mapped = mapSpeakerToAgent(entry.speaker)
+                const isUser = entry.speaker === 'you' || entry.speaker === 'user'
+                return (
+                  <motion.div
+                    key={entry.id}
+                    className={`msg ${isUser ? 'msg-user' : ''} ${entry.speaker === 'system' ? 'msg-system' : ''}`}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    layout
+                  >
+                    <div className="msg-header">
+                      <span className="msg-speaker" style={{ color: mapped.color }}>{mapped.name}</span>
+                      <span className="msg-time">{new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                    </div>
+                    <div className="msg-text">{entry.text}</div>
+                  </motion.div>
+                )
+              })}
             </AnimatePresence>
+            <div ref={transcriptEndRef} />
           </div>
-        </motion.aside>
+        </aside>
       </section>
     </main>
   )
