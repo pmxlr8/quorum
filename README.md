@@ -4,10 +4,8 @@ Bhavesh Gupta,
 Pranjal Mishra,
 Aru Koshkarova
 
-<p align="center">
-  <video src="[https://github.com/pmxlr8/quorum/blob/main/COlumbiaXStrangerThings.mp4](https://github.com/user-attachments/assets/859162e9-d9b1-4a9c-b1ff-45e79941e457
-)" width="80%" controls></video>
-</p>
+
+https://www.youtube.com/watch?v=MSZcMDbuw8k
 
 
 # Virtual War Room
