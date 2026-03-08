@@ -1,3 +1,12 @@
+# Team Members
+Anzhelika Siui,
+Bhavesh Gupta,
+Pranjal Mishra,
+Aru Koshkarova
+
+
+
+
 # Virtual War Room
 
 Monorepo:
