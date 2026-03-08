@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 # ── Shared types (mirror frontend/src/types/warroom.ts) ──────────────────────
 
-AgentRole = Literal["chairperson", "analyst", "advocate", "critic", "secretary"]
+AgentRole = Literal["chairperson", "analyst", "advocate", "critic", "secretary", "custom"]
 VoteValue = Literal["yes", "no", "abstain"]
 SessionStatus = Literal["idle", "connecting", "active", "error", "ended"]
 SpeakingState = Literal["idle", "listening", "speaking", "thinking"]

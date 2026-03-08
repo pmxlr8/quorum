@@ -3,7 +3,7 @@ steps:
     args:
       - build
       - -t
-      - gcr.io/$PROJECT_ID/warroom-backend:latest
+      - us-central1-docker.pkg.dev/$PROJECT_ID/quorum/backend:latest
       - .
 images:
-  - gcr.io/$PROJECT_ID/warroom-backend:latest
+  - us-central1-docker.pkg.dev/$PROJECT_ID/quorum/backend:latest

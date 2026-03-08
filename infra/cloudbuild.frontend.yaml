@@ -3,11 +3,14 @@ steps:
     args:
       - build
       - -t
-      - gcr.io/$PROJECT_ID/warroom-frontend:latest
+      - us-central1-docker.pkg.dev/$PROJECT_ID/quorum/frontend:latest
       - --build-arg
-      - VITE_WS_BASE_URL=${_VITE_WS_BASE_URL}
+      - VITE_WS_URL=${_VITE_WS_URL}
+      - --build-arg
+      - VITE_API_URL=${_VITE_API_URL}
       - .
 images:
-  - gcr.io/$PROJECT_ID/warroom-frontend:latest
+  - us-central1-docker.pkg.dev/$PROJECT_ID/quorum/frontend:latest
 substitutions:
-  _VITE_WS_BASE_URL: ws://localhost:8000
+  _VITE_WS_URL: ws://localhost:8000/ws
+  _VITE_API_URL: http://localhost:8000

@@ -6,7 +6,8 @@ Architecture:
   - User audio goes to the "primary listener" (Director/moderator by default).
   - After the primary responds, other agents are prompted via TEXT to contribute.
   - Each agent responds with audio in their own distinct voice.
-  - Turn-taking is managed via an asyncio queue.
+  - STRICT turn-taking: only ONE agent speaks at a time.
+  - When the user speaks, ALL agents immediately stop and listen.
 """
 
 from __future__ import annotations
@@ -103,6 +104,9 @@ class AgentLiveSession:
         # Transcript accumulation
         self._accumulated_transcript = ""
 
+        # Gate: is this agent allowed to send audio to the client right now?
+        self.audio_gate_open = False
+
     def _make_run_config(self) -> RunConfig:
         """Create RunConfig with this agent's unique voice."""
         return RunConfig(
@@ -140,7 +144,7 @@ class AgentLiveSession:
             name=f"agent-{self.agent_name}-{self._parent_id}",
         )
         logger.info(
-            "AgentLiveSession started: %s (voice=%s, adk_session=%s)",
+            "[AGENT:%s] Session started (voice=%s, adk_session=%s)",
             self.agent_name, self.voice, session.id,
         )
 
@@ -160,22 +164,25 @@ class AgentLiveSession:
                 if event.content and event.content.parts:
                     for part in event.content.parts:
                         if part.inline_data and part.inline_data.data:
-                            audio_b64 = base64.b64encode(
-                                part.inline_data.data
-                            ).decode("ascii")
-                            await self._on_audio(self.agent_id, audio_b64)
+                            if self.audio_gate_open:
+                                audio_b64 = base64.b64encode(
+                                    part.inline_data.data
+                                ).decode("ascii")
+                                await self._on_audio(self.agent_id, audio_b64)
+                            # else: audio dropped — not this agent's turn
 
                         if part.text and not event.partial:
-                            await self._on_transcript(
-                                self.agent_id, self.agent_name, self.info.role, part.text
-                            )
+                            if self.audio_gate_open:
+                                await self._on_transcript(
+                                    self.agent_id, self.agent_name, self.info.role, part.text
+                                )
 
                 # ── Output transcription ─────────────────────────────
                 if event.output_transcription and event.output_transcription.text:
                     text = event.output_transcription.text
                     if event.output_transcription.finished:
                         final_text = text if text else self._accumulated_transcript
-                        if final_text.strip():
+                        if final_text.strip() and self.audio_gate_open:
                             await self._on_transcript(
                                 self.agent_id, self.agent_name, self.info.role,
                                 final_text,
@@ -191,22 +198,24 @@ class AgentLiveSession:
 
                 # ── Turn complete ────────────────────────────────────
                 if event.turn_complete:
+                    logger.info("[AGENT:%s] turn_complete event", self.agent_name)
                     await self._on_turn_complete(self.agent_id)
 
                 # ── Interrupted ──────────────────────────────────────
                 if event.interrupted:
+                    logger.info("[AGENT:%s] interrupted event", self.agent_name)
                     await self._on_turn_complete(self.agent_id)
 
                 # ── Error ────────────────────────────────────────────
                 if event.error_message:
-                    logger.error("Agent %s ADK error: %s", self.agent_name, event.error_message)
+                    logger.error("[AGENT:%s] ADK error: %s", self.agent_name, event.error_message)
                     await self._on_error(self.agent_id, event.error_message)
 
         except asyncio.CancelledError:
-            logger.info("Agent %s event loop cancelled", self.agent_name)
+            logger.info("[AGENT:%s] event loop cancelled", self.agent_name)
         except Exception as e:
             tb = traceback.format_exc()
-            logger.error("Agent %s event loop error: %s\n%s", self.agent_name, e, tb)
+            logger.error("[AGENT:%s] event loop error: %s\n%s", self.agent_name, e, tb)
             await self._on_error(self.agent_id, str(e))
         finally:
             self._active = False
@@ -220,6 +229,7 @@ class AgentLiveSession:
     def send_text(self, text: str) -> None:
         """Send a text message to this agent."""
         if self._queue and self._active:
+            logger.debug("[AGENT:%s] Sending text (%d chars)", self.agent_name, len(text))
             content = types.Content(
                 parts=[types.Part(text=text)],
                 role="user",
@@ -237,6 +247,7 @@ class AgentLiveSession:
     async def stop(self) -> None:
         """Shut down this agent's session."""
         self._active = False
+        self.audio_gate_open = False
         if self._queue:
             self._queue.close()
         if self._task and not self._task.done():
@@ -245,19 +256,20 @@ class AgentLiveSession:
                 await self._task
             except asyncio.CancelledError:
                 pass
-        logger.info("Agent %s session stopped", self.agent_name)
+        logger.info("[AGENT:%s] session stopped", self.agent_name)
 
 
 # ── Multi-agent orchestrator ────────────────────────────────────────────────
 
 class MultiAgentSession:
-    """Manages multiple agent Live sessions with turn-taking.
+    """Manages multiple agent Live sessions with STRICT sequential turn-taking.
 
-    Architecture:
-      - Each agent has its own Gemini Live session with a unique voice.
-      - User audio goes to the "primary listener" (first agent / Director).
-      - After primary responds, other agents are prompted to contribute.
-      - Audio is queued so only one agent plays at a time.
+    Key behaviors:
+      1. Only ONE agent speaks at a time (audio gate system).
+      2. When the user speaks, ALL agents immediately stop and listen.
+      3. After user finishes → primary agent responds → then each other agent
+         gets a turn in sequence, with FULL conversation context.
+      4. Everything is heavily logged for debugging.
     """
 
     def __init__(
@@ -277,22 +289,27 @@ class MultiAgentSession:
         self._agent_order: list[str] = []  # agent IDs in speaking order
         self._primary_agent_id: str | None = None  # receives user audio
 
-        # Turn management
+        # Turn management — STRICT: only one speaker at a time
         self._current_speaker: str | None = None
         self._turn_complete_event = asyncio.Event()
-        self._speaking_lock = asyncio.Lock()
+        self._orchestration_lock = asyncio.Lock()  # prevents overlapping orchestration rounds
+        self._user_is_speaking = False  # when True, cancel all agent output
+        self._orchestration_task: asyncio.Task | None = None  # current followup task
 
         # Shared conversation transcript for context
         self._conversation_history: list[str] = []  # "Name: text" lines
+        self._last_user_text: str = ""  # last transcribed user speech
         self._transcript_counter = 0
         self._vote_counter = 0
         self._active = False
-        self._input_transcript_sent = False  # avoid duplicate user transcript
+        self._audio_chunk_count = 0  # for logging
 
     async def start(self) -> None:
         """Initialize all agent sessions and notify frontend."""
         logger.info(
-            "Starting MultiAgentSession %s with agents %s",
+            "═══════════════════════════════════════════════════════════════\n"
+            "  [SESSION:%s] STARTING with agents %s\n"
+            "═══════════════════════════════════════════════════════════════",
             self.session_id, self._agent_ids,
         )
 
@@ -302,8 +319,10 @@ class MultiAgentSession:
             agent_def = get_agent(aid)
             if agent_def:
                 agent_defs.append(agent_def)
+                logger.info("[SESSION:%s] Agent resolved: %s (%s, voice=%s)",
+                            self.session_id, agent_def.name, agent_def.role, agent_def.voice)
             else:
-                logger.warning("Agent %s not found, skipping", aid)
+                logger.warning("[SESSION:%s] Agent %s NOT FOUND, skipping", self.session_id, aid)
 
         if not agent_defs:
             await self._send(
@@ -317,6 +336,7 @@ class MultiAgentSession:
         ordered = chairpersons + non_chairpersons
 
         all_names = [a.name for a in ordered]
+        logger.info("[SESSION:%s] Speaking order: %s", self.session_id, [a.name for a in ordered])
 
         # Create individual agent sessions
         for agent_def in ordered:
@@ -333,12 +353,15 @@ class MultiAgentSession:
         # Primary listener = first agent (usually Director/chairperson)
         self._primary_agent_id = self._agent_order[0]
         self._active = True
+        logger.info("[SESSION:%s] Primary listener: %s",
+                    self.session_id, self._agent_sessions[self._primary_agent_id].agent_name)
 
         # Build agents list for frontend
         agents_info = [s.info for s in self._agent_sessions.values()]
 
         # Send session.ready
         await self._send(SessionReadyMsg(agents=agents_info).model_dump())
+        logger.info("[SESSION:%s] Sent session.ready to frontend", self.session_id)
 
         # Start ALL agent live sessions concurrently
         start_tasks = []
@@ -353,15 +376,63 @@ class MultiAgentSession:
                 )
             )
         await asyncio.gather(*start_tasks)
-        logger.info("All %d agent sessions started", len(self._agent_sessions))
+        logger.info("[SESSION:%s] ✓ All %d agent Gemini sessions connected",
+                    self.session_id, len(self._agent_sessions))
+
+    # ── User interruption: STOP ALL AGENTS ──────────────────────────────────
+
+    async def _interrupt_all_agents(self) -> None:
+        """When user starts speaking, immediately stop all agent output."""
+        logger.info("[SESSION:%s] ▶▶▶ USER INTERRUPTION — stopping all agents", self.session_id)
+        self._user_is_speaking = True
+
+        # Cancel any ongoing orchestration
+        if self._orchestration_task and not self._orchestration_task.done():
+            logger.info("[SESSION:%s] Cancelling ongoing orchestration", self.session_id)
+            self._orchestration_task.cancel()
+            try:
+                await self._orchestration_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._orchestration_task = None
+
+        # Close all audio gates — no agent can send audio to client
+        for aid, session in self._agent_sessions.items():
+            if session.audio_gate_open:
+                session.audio_gate_open = False
+                logger.info("[SESSION:%s] Closed audio gate for %s", self.session_id, session.agent_name)
+
+        # Mark all as idle on frontend
+        if self._current_speaker:
+            await self._send(
+                AgentStateMsg(agentId=self._current_speaker, speakingState="idle").model_dump()
+            )
+            self._current_speaker = None
+
+        # Signal turn complete so any waiting code unblocks
+        self._turn_complete_event.set()
+
+    async def _user_done_speaking(self) -> None:
+        """User stopped speaking — agents can resume."""
+        logger.info("[SESSION:%s] ◀◀◀ USER DONE SPEAKING", self.session_id)
+        self._user_is_speaking = False
 
     # ── Callbacks from individual agent sessions ────────────────────────────
 
     async def _handle_agent_audio(self, agent_id: str, audio_b64: str) -> None:
-        """Forward audio from an agent to the client."""
+        """Forward audio from an agent to the client — ONLY if it's their turn."""
+        session = self._agent_sessions.get(agent_id)
+        if not session or not session.audio_gate_open:
+            return  # not this agent's turn (gate system handles everything)
+
         # Update speaking state if needed
         if self._current_speaker != agent_id:
             await self._set_speaker(agent_id)
+
+        self._audio_chunk_count += 1
+        if self._audio_chunk_count % 20 == 1:
+            logger.debug("[SESSION:%s] Audio chunk #%d from %s",
+                        self.session_id, self._audio_chunk_count, session.agent_name)
 
         await self._send(AudioOutMsg(data=audio_b64).model_dump())
 
@@ -372,7 +443,7 @@ class MultiAgentSession:
         if not text.strip():
             return
 
-        # Clean up: remove self-prefixing that some agents do despite instructions
+        # Clean up: remove self-prefixing that some agents do
         clean_text = re.sub(
             rf"^\s*{re.escape(agent_name)}\s*:\s*",
             "",
@@ -381,6 +452,8 @@ class MultiAgentSession:
         ).strip()
         if not clean_text:
             clean_text = text.strip()
+
+        logger.info("[SESSION:%s] 💬 %s: %s", self.session_id, agent_name, clean_text[:120])
 
         # Detect vote proposals
         vote_match = re.search(
@@ -395,6 +468,7 @@ class MultiAgentSession:
                 motion=vote_match.group(1).strip(),
             )
             await self._send(VoteProposedMsg(vote=vote).model_dump())
+            logger.info("[SESSION:%s] Vote proposed: %s", self.session_id, vote.motion)
 
         # Add to conversation history for cross-agent context
         self._conversation_history.append(f"{agent_name}: {clean_text}")
@@ -404,7 +478,14 @@ class MultiAgentSession:
 
     async def _handle_turn_complete(self, agent_id: str) -> None:
         """Called when an agent finishes speaking."""
-        logger.info("Turn complete for agent %s", agent_id)
+        session = self._agent_sessions.get(agent_id)
+        name = session.agent_name if session else agent_id
+        logger.info("[SESSION:%s] ✓ Turn complete: %s", self.session_id, name)
+
+        # Close this agent's audio gate
+        if session:
+            session.audio_gate_open = False
+
         if self._current_speaker == agent_id:
             await self._send(
                 AgentStateMsg(agentId=agent_id, speakingState="idle").model_dump()
@@ -416,73 +497,159 @@ class MultiAgentSession:
 
     async def _handle_agent_error(self, agent_id: str, error: str) -> None:
         """Handle error from an agent session."""
-        logger.error("Agent %s error: %s", agent_id, error)
+        session = self._agent_sessions.get(agent_id)
+        name = session.agent_name if session else agent_id
+        logger.error("[SESSION:%s] ❌ Agent %s error: %s", self.session_id, name, error)
+
+        # Don't send "Internal streaming error" to frontend as session.error
+        # — it's usually transient and the agent can still work
+        if "internal" in error.lower() and "streaming" in error.lower():
+            logger.warning("[SESSION:%s] Transient Gemini error for %s, not killing session", self.session_id, name)
+            # Signal turn complete so orchestration can continue
+            self._turn_complete_event.set()
+            return
+
         await self._send(
-            SessionErrorMsg(message=f"Agent error ({agent_id}): {error}").model_dump()
+            SessionErrorMsg(message=f"Agent error ({name}): {error}").model_dump()
         )
 
     async def _handle_input_transcript(self, text: str) -> None:
-        """Handle user's speech transcription (from primary listener)."""
-        if not self._input_transcript_sent:
-            self._input_transcript_sent = True
-            # Reset after a short delay to allow next input
-            asyncio.get_event_loop().call_later(2.0, self._reset_input_flag)
-
-            self._conversation_history.append(f"User: {text}")
-            await self._add_transcript("user", "You", "chairperson", text)
-
-            # After primary agent responds, prompt other agents
-            # Give primary a moment to start responding, then schedule follow-ups
-            asyncio.create_task(self._orchestrate_followup(text))
-
-    def _reset_input_flag(self):
-        self._input_transcript_sent = False
+        """Handle user's speech transcription (from primary listener).
+        
+        NOTE: We do NOT start orchestration here because the user is still
+        talking (audio chunks still flowing). Orchestration starts in
+        send_activity_end() when the user actually releases the mic.
+        """
+        logger.info("[SESSION:%s] 🎤 USER SAID: %s", self.session_id, text)
+        self._last_user_text = text
+        self._conversation_history.append(f"User: {text}")
+        await self._add_transcript("user", "You", "chairperson", text)
 
     # ── Turn orchestration ──────────────────────────────────────────────────
 
-    async def _orchestrate_followup(self, user_text: str) -> None:
-        """After the primary agent responds, prompt other agents to contribute."""
-        if not self._active:
-            return
+    async def _start_orchestration(self, user_text: str) -> None:
+        """Cancel any existing orchestration and start a new round."""
+        if self._orchestration_task and not self._orchestration_task.done():
+            logger.info("[SESSION:%s] Cancelling previous orchestration", self.session_id)
+            self._orchestration_task.cancel()
+            try:
+                await self._orchestration_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
-        # Wait for primary agent to finish their turn
-        self._turn_complete_event.clear()
-        try:
-            await asyncio.wait_for(self._turn_complete_event.wait(), timeout=30.0)
-        except asyncio.TimeoutError:
-            logger.warning("Primary agent turn timeout, proceeding with follow-ups")
+        self._orchestration_task = asyncio.create_task(
+            self._orchestrate_round(user_text),
+            name=f"orchestrate-{self.session_id}",
+        )
 
-        if not self._active:
-            return
+    async def _orchestrate_round(self, user_text: str) -> None:
+        """Full orchestration round: primary responds, then each other agent gets a turn.
 
-        # Build conversation context for other agents
-        context = "\n".join(self._conversation_history[-10:])
-
-        # Prompt each non-primary agent in order
-        for agent_id in self._agent_order[1:]:
+        STRICT rules:
+          - Only one agent speaks at a time (audio gate)
+          - If user interrupts, everything cancels
+          - Each agent gets FULL conversation context
+        """
+        async with self._orchestration_lock:
             if not self._active:
-                break
+                return
 
-            agent_session = self._agent_sessions.get(agent_id)
-            if not agent_session:
-                continue
-
-            # Send conversation context + prompt to contribute
-            prompt = (
-                f"[Conversation update]\n{context}\n\n"
-                f"It's your turn to contribute to the discussion. "
-                f"Respond in character. If you have nothing to add, just say 'I'll pass on this one' very briefly."
+            logger.info(
+                "[SESSION:%s] ═══ ORCHESTRATION ROUND START ═══\n"
+                "  User said: %s\n"
+                "  Conversation history: %d lines",
+                self.session_id, user_text[:100], len(self._conversation_history),
             )
-            agent_session.send_text(prompt)
 
-            # Wait for this agent to finish
+            # ── Phase 1: Wait for primary agent to respond ──────────────
+
+            primary = self._agent_sessions.get(self._primary_agent_id)
+            if not primary:
+                logger.error("[SESSION:%s] Primary agent not found!", self.session_id)
+                return
+
+            # Open ONLY primary's audio gate
+            self._close_all_gates()
+            primary.audio_gate_open = True
+            logger.info("[SESSION:%s] 🔊 Opened gate for PRIMARY: %s", self.session_id, primary.agent_name)
+
+            # Wait for primary to finish speaking
             self._turn_complete_event.clear()
             try:
-                await asyncio.wait_for(self._turn_complete_event.wait(), timeout=20.0)
+                await asyncio.wait_for(self._turn_complete_event.wait(), timeout=45.0)
+                logger.info("[SESSION:%s] Primary %s finished speaking", self.session_id, primary.agent_name)
             except asyncio.TimeoutError:
-                logger.warning("Agent %s turn timeout", agent_id)
+                logger.warning("[SESSION:%s] ⏰ Primary %s turn TIMEOUT (45s)", self.session_id, primary.agent_name)
+            except asyncio.CancelledError:
+                logger.info("[SESSION:%s] Orchestration cancelled during primary turn", self.session_id)
+                self._close_all_gates()
+                return
 
-        logger.info("All agents have had their turn")
+            if not self._active:
+                logger.info("[SESSION:%s] Aborting orchestration (inactive)", self.session_id)
+                self._close_all_gates()
+                return
+
+            # ── Phase 2: Other agents respond in sequence ───────────────
+
+            for i, agent_id in enumerate(self._agent_order):
+                if agent_id == self._primary_agent_id:
+                    continue  # skip primary, already spoke
+
+                if not self._active:
+                    logger.info("[SESSION:%s] Aborting followup (inactive)", self.session_id)
+                    break
+
+                agent_session = self._agent_sessions.get(agent_id)
+                if not agent_session:
+                    continue
+
+                logger.info("[SESSION:%s] ── Agent %d/%d: %s's turn ──",
+                           self.session_id, i + 1, len(self._agent_order) - 1, agent_session.agent_name)
+
+                # Build FULL conversation context
+                full_context = "\n".join(self._conversation_history)
+
+                prompt = (
+                    f"[FULL CONVERSATION SO FAR]\n{full_context}\n\n"
+                    f"───────────────────────────────\n"
+                    f"It's now YOUR turn to speak, {agent_session.agent_name}. "
+                    f"Respond to the discussion above in character. "
+                    f"Keep it concise (2-4 sentences). "
+                    f"If you have nothing meaningful to add, just say 'Nothing to add' very briefly."
+                )
+
+                # Close all gates, open ONLY this agent's gate
+                self._close_all_gates()
+                agent_session.audio_gate_open = True
+                logger.info("[SESSION:%s] 🔊 Opened gate for %s", self.session_id, agent_session.agent_name)
+
+                # Send the prompt
+                agent_session.send_text(prompt)
+
+                # Wait for this agent to finish
+                self._turn_complete_event.clear()
+                try:
+                    await asyncio.wait_for(self._turn_complete_event.wait(), timeout=30.0)
+                    logger.info("[SESSION:%s] ✓ %s finished speaking", self.session_id, agent_session.agent_name)
+                except asyncio.TimeoutError:
+                    logger.warning("[SESSION:%s] ⏰ %s turn TIMEOUT (30s)", self.session_id, agent_session.agent_name)
+                except asyncio.CancelledError:
+                    logger.info("[SESSION:%s] Orchestration cancelled during %s's turn",
+                               self.session_id, agent_session.agent_name)
+                    self._close_all_gates()
+                    return
+
+                # Small pause between agents so audio doesn't run together
+                await asyncio.sleep(0.3)
+
+            self._close_all_gates()
+            logger.info("[SESSION:%s] ═══ ORCHESTRATION ROUND COMPLETE ═══", self.session_id)
+
+    def _close_all_gates(self) -> None:
+        """Close all agent audio gates so nobody can send audio."""
+        for session in self._agent_sessions.values():
+            session.audio_gate_open = False
 
     # ── Speaker state management ────────────────────────────────────────────
 
@@ -495,6 +662,9 @@ class MultiAgentSession:
                 ).model_dump()
             )
         self._current_speaker = agent_id
+        session = self._agent_sessions.get(agent_id)
+        name = session.agent_name if session else agent_id
+        logger.info("[SESSION:%s] 🔈 Now speaking: %s", self.session_id, name)
         await self._send(
             AgentStateMsg(agentId=agent_id, speakingState="speaking").model_dump()
         )
@@ -517,12 +687,20 @@ class MultiAgentSession:
     # ── Public methods for upstream data ─────────────────────────────────────
 
     async def send_audio(self, audio_b64: str) -> None:
-        """Send audio from user mic to the primary listener agent."""
+        """Send audio from user mic to the primary listener agent.
+
+        When user starts sending audio, we INTERRUPT all agents.
+        """
         if not self._active or not self._primary_agent_id:
             return
+
+        # If user just started speaking, interrupt everything
+        if not self._user_is_speaking:
+            await self._interrupt_all_agents()
+
         audio_bytes = base64.b64decode(audio_b64)
 
-        # Send to primary listener
+        # Send ONLY to primary listener
         primary = self._agent_sessions.get(self._primary_agent_id)
         if primary:
             primary.send_audio(audio_bytes)
@@ -532,38 +710,68 @@ class MultiAgentSession:
         if not self._active:
             return
 
+        logger.info("[SESSION:%s] 📝 User text: %s", self.session_id, text[:100])
+
+        # Interrupt any current agent speech
+        await self._interrupt_all_agents()
+        self._user_is_speaking = False  # text is instant, not ongoing
+
         # Add to transcript
         self._conversation_history.append(f"User: {text}")
         await self._add_transcript("user", "You", "chairperson", text)
 
-        # Send to primary agent
+        # Open primary's gate and send to primary agent
         primary = self._agent_sessions.get(self._primary_agent_id)
         if primary:
+            primary.audio_gate_open = True
             primary.send_text(text)
 
-        # Schedule follow-ups from other agents
-        asyncio.create_task(self._orchestrate_followup(text))
+        # Schedule full orchestration round
+        await self._start_orchestration(text)
 
     def send_activity_start(self) -> None:
-        """Signal all agents that user started speaking."""
-        for agent_session in self._agent_sessions.values():
-            agent_session.send_activity_start()
+        """Signal that user started speaking — need to interrupt agents."""
+        logger.info("[SESSION:%s] 🎙️ User mic ACTIVATED", self.session_id)
+        # The actual interruption happens in send_audio() on first chunk
+        # send_activity_start to primary so it knows to listen
+        primary = self._agent_sessions.get(self._primary_agent_id)
+        if primary:
+            primary.send_activity_start()
 
     def send_activity_end(self) -> None:
-        """Signal all agents that user stopped speaking."""
-        for agent_session in self._agent_sessions.values():
-            agent_session.send_activity_end()
+        """Signal that user stopped speaking — NOW start orchestration."""
+        logger.info("[SESSION:%s] 🎙️ User mic DEACTIVATED", self.session_id)
+        self._user_is_speaking = False
+
+        # Signal activity end to primary
+        primary = self._agent_sessions.get(self._primary_agent_id)
+        if primary:
+            primary.send_activity_end()
+            # Open primary's gate so it can respond
+            primary.audio_gate_open = True
+            logger.info("[SESSION:%s] 🔊 Opened gate for primary %s after user stopped",
+                       self.session_id, primary.agent_name)
+
+        # NOW start orchestration — user is done talking
+        user_text = getattr(self, '_last_user_text', '') or 'User finished speaking'
+        asyncio.create_task(self._start_orchestration(user_text))
 
     async def send_text_to_agent(self, agent_id: str, text: str) -> None:
         """Send text directly to a specific agent."""
         agent_session = self._agent_sessions.get(agent_id)
         if agent_session:
+            logger.info("[SESSION:%s] Direct text to %s: %s", self.session_id, agent_session.agent_name, text[:80])
             agent_session.send_text(text)
 
     async def stop(self) -> None:
         """Shut down all agent sessions."""
-        logger.info("Stopping MultiAgentSession %s", self.session_id)
+        logger.info("[SESSION:%s] ═══ STOPPING SESSION ═══", self.session_id)
         self._active = False
+        self._close_all_gates()
+
+        if self._orchestration_task and not self._orchestration_task.done():
+            self._orchestration_task.cancel()
+
         stop_tasks = [s.stop() for s in self._agent_sessions.values()]
         await asyncio.gather(*stop_tasks, return_exceptions=True)
-        logger.info("MultiAgentSession %s stopped", self.session_id)
+        logger.info("[SESSION:%s] ═══ SESSION STOPPED ═══", self.session_id)

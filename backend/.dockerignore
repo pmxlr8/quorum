@@ -1,0 +1,9 @@
+# ignore for Docker build
+.venv
+__pycache__
+*.pyc
+tests/
+scripts/
+.git
+*.md
+quorum_agents.db*

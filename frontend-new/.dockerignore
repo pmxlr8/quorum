@@ -1,0 +1,10 @@
+# ignore for Docker build
+node_modules
+dist
+.git
+*.md
+.env
+.env.local
+bun.lock
+bun.lockb
+vitest.config.ts

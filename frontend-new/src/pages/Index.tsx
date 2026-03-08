@@ -25,7 +25,7 @@ export default function WarRoom() {
   });
   const [userVote, setUserVote] = useState<VoteValue | undefined>();
   const [sessionSeconds, setSessionSeconds] = useState(0);
-  const [intervalId, setIntervalId] = useState<ReturnType<typeof setInterval> | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [isHandRaised, setIsHandRaised] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [sessionAgenda, setSessionAgenda] = useState("");
@@ -120,11 +120,13 @@ export default function WarRoom() {
 
       case "session.error": {
         console.error("[Server Error]", msg.message);
+        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
         setState((prev) => ({ ...prev, sessionStatus: "error" }));
         break;
       }
 
       case "session.ended": {
+        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
         setState((prev) => ({
           ...prev,
           sessionStatus: "ended",
@@ -146,25 +148,37 @@ export default function WarRoom() {
     setShowSetup(false);
     setSessionAgenda(config.agenda);
 
-    // Connect to WebSocket and create session
-    setState((prev) => ({ ...prev, sessionStatus: "connecting" }));
-    connect();
+    // Tear down any old connection first
+    disconnect();
 
-    // Give WS a moment to connect, then send session.create
-    setTimeout(() => {
-      send({
-        type: "session.create",
-        config: {
-          agenda: config.agenda,
-          selectedAgentIds: config.selectedAgentIds,
-        },
-      });
-    }, 500);
+    // Full state reset
+    setState({
+      sessionStatus: "connecting",
+      agents: [],
+      transcript: [],
+      currentVote: null,
+      documents: [],
+      isMicActive: false,
+      isSpeakerActive: true,
+    });
+    setUserVote(undefined);
+    setIsHandRaised(false);
+
+    // Send session.create FIRST (it will be queued), then connect
+    // The hook flushes queued messages as soon as the WS opens
+    send({
+      type: "session.create",
+      config: {
+        agenda: config.agenda,
+        selectedAgentIds: config.selectedAgentIds,
+      },
+    });
+    connect();
 
     // Start timer
     setSessionSeconds(0);
-    const id = setInterval(() => setSessionSeconds((s) => s + 1), 1000);
-    setIntervalId(id);
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    intervalRef.current = setInterval(() => setSessionSeconds((s) => s + 1), 1000);
   }, [connect, send]);
 
   const handleStartSession = useCallback(() => {
@@ -185,9 +199,9 @@ export default function WarRoom() {
       isMicActive: false,
       agents: prev.agents.map((a) => ({ ...a, speakingState: "idle" as const })),
     }));
-    if (intervalId) clearInterval(intervalId);
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     disconnect();
-  }, [intervalId, disconnect]);
+  }, [disconnect]);
 
   // ── Voice controls ────────────────────────────────────────────────────────
 

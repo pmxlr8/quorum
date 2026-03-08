@@ -249,9 +249,38 @@ DEFAULT_AGENTS: dict[str, AgentDefinition] = {
 }
 
 
-# ── Custom agent store (in-memory) ──────────────────────────────────────────
+# ── Custom agent store (in-memory + SQLite) ──────────────────────────────────
+
+from backend.models.agent_db import init_db, save_agent, load_all_agents, delete_agent as db_delete_agent
 
 _custom_agents: dict[str, AgentDefinition] = {}
+
+
+def _load_custom_agents_from_db() -> None:
+    """Load persisted custom agents from SQLite into memory on startup."""
+    init_db()
+    rows = load_all_agents()
+    for row in rows:
+        agent = AgentDefinition(
+            id=row["id"],
+            name=row["name"],
+            role=row["role"],
+            label=row["label"],
+            description=row["description"],
+            personality=row["personality"],
+            speaking_style=row["speaking_style"],
+            tone=row["tone"],
+            expertise=row["expertise"],
+            voice=row["voice"],
+            avatar_url=row.get("avatar_url", ""),
+            background_theme=row.get("background_theme", ""),
+            is_builtin=False,
+        )
+        _custom_agents[agent.id] = agent
+
+
+# Auto-load on import
+_load_custom_agents_from_db()
 
 
 def get_all_agents() -> dict[str, AgentDefinition]:
@@ -277,7 +306,7 @@ def create_custom_agent(
     avatar_url: str = "",
     background_theme: str = "",
 ) -> AgentDefinition:
-    """Create a new custom agent."""
+    """Create a new custom agent and persist to SQLite."""
     agent_id = f"custom-{uuid.uuid4().hex[:8]}"
     agent = AgentDefinition(
         id=agent_id,
@@ -295,12 +324,30 @@ def create_custom_agent(
         is_builtin=False,
     )
     _custom_agents[agent_id] = agent
+
+    # Persist to DB
+    save_agent(
+        agent_id=agent_id,
+        name=name,
+        role=role,
+        label=label,
+        description=description,
+        personality=personality,
+        speaking_style=speaking_style,
+        tone=tone,
+        expertise=expertise,
+        voice=agent.voice,
+        avatar_url=avatar_url,
+        background_theme=background_theme,
+    )
     return agent
 
 
 def delete_custom_agent(agent_id: str) -> bool:
-    """Delete a custom agent. Cannot delete built-in agents."""
-    return _custom_agents.pop(agent_id, None) is not None
+    """Delete a custom agent from memory and DB. Cannot delete built-in agents."""
+    removed = _custom_agents.pop(agent_id, None) is not None
+    db_deleted = db_delete_agent(agent_id)
+    return removed or db_deleted
 
 
 def list_agents_for_api() -> list[dict]:

@@ -21,6 +21,11 @@ frontend-new/.env.local
 # OS
 .DS_Store
 
+# SQLite DB
+*.db
+*.db-wal
+*.db-shm
+
 # Local agent workspace
 .claude/
 .gcloud/
