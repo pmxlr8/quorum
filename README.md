@@ -5,7 +5,7 @@ Pranjal Mishra,
 Aru Koshkarova
 
 <p align="center">
-  <video src="./COlumbiaXStrangerThings.mp4" width="80%" controls></video>
+  <video src="https://github.com/pmxlr8/quorum/blob/main/COlumbiaXStrangerThings.mp4" width="80%" controls></video>
 </p>
 
 
