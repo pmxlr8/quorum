@@ -5,7 +5,7 @@ Pranjal Mishra,
 Aru Koshkarova
 
 
-https://www.youtube.com/watch?v=MSZcMDbuw8k
+![](https://www.youtube.com/watch?v=MSZcMDbuw8k)
 
 
 # Virtual War Room
