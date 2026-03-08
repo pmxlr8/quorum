@@ -1,0 +1,32 @@
+name: Style and Contract Check
+
+on:
+  pull_request:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  docs-and-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enforce no stale live model IDs in docs
+        run: |
+          if grep -nE "gemini-live-2.5-flash-native-audio|gemini-live-2.5-flash-preview|gemini-2.0-flash-live-001|gemini-flash-2.0" "untitled folder/technical_doc.md" "untitled folder/CLAUDE.md"; then
+            echo "Found stale/blocked model IDs";
+            exit 1;
+          fi
+
+      - name: Enforce canonical vote enum in docs
+        run: |
+          if grep -nE "\"approve\"|\"reject\"|\"delay\"" "untitled folder/technical_doc.md"; then
+            echo "Found non-canonical vote enum";
+            exit 1;
+          fi
+
+      - name: Verify CLAUDE workflow files exist
+        run: |
+          test -f "untitled folder/CLAUDE.md"
+          test -f "untitled folder/prd/tasks-war-room.md"
+          test -f "untitled folder/progress/progress.txt"

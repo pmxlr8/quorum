@@ -1,0 +1,132 @@
+# Append-only progress log
+
+## Session Template
+### Session N - YYYY-MM-DD HH:MM TZ
+Completed Tasks:
+- TASK-ID: short summary
+
+Tech Notes:
+- Decision + rationale
+- Unexpected issue + mitigation
+
+Test Evidence:
+- Command:
+- Input:
+- Expected:
+- Actual:
+- Result: pass/fail
+
+Files Touched:
+- path/to/file
+
+Next Tasks:
+- TASK-ID
+
+---
+
+### Session 0 - 2026-03-08 08:00 EST
+Completed Tasks:
+- INFRA-000: Pre-implementation operating system scaffolded
+
+Tech Notes:
+- Corrected technical spec to use a valid Live model strategy and consistent audio contract.
+- Added local skills, decision docs, PRD, and style-enforcement baseline before implementation.
+
+Test Evidence:
+- Command: `rg`/`sed` consistency checks on technical docs
+- Input: model IDs, event enums, audio contract strings
+- Expected: no stale IDs or contradictory contracts
+- Actual: stale IDs removed; contract normalized
+- Result: pass
+
+Files Touched:
+- technical_doc.md
+- CLAUDE.md
+- prd/tasks-war-room.md
+- decision-docs/*
+- skills/*/SKILL.md
+- quality/style-enforcement.md
+- .github/workflows/style-check.yml
+
+Next Tasks:
+- BACK-001
+- FRONT-001
+
+### Session 1 - 2026-03-08 08:15 EST
+Completed Tasks:
+- BACK-001: FastAPI app skeleton with lifespan and health endpoint.
+- BACK-002: WebSocket session manager with connect/disconnect and broadcast.
+- FRONT-001: React+TypeScript strict scaffold with WS state store and reconnect.
+
+Tech Notes:
+- BACK-003 is scaffolded with `LiveBridge` abstraction and `LIVE_MODEL_ID` wiring; ADK runner integration remains.
+- FRONT-002 moved to AudioWorklet-first capture path with ScriptProcessor fallback.
+- Deployment lane bootstrapped with Cloud Build configs and Cloud Run deploy script.
+
+Test Evidence:
+- Command: `python3 -m py_compile $(find backend -name '*.py' -type f)`
+- Input: all backend Python modules
+- Expected: compile success without syntax errors
+- Actual: compile completed with no errors
+- Result: pass
+
+Files Touched:
+- backend/api/main.py
+- backend/api/ws.py
+- backend/services/session_manager.py
+- backend/services/live_bridge.py
+- backend/models/events.py
+- backend/tests/*
+- frontend/src/store/wsStore.ts
+- frontend/src/hooks/useVoiceCapture.ts
+- frontend/src/hooks/useAudioPlayer.ts
+- frontend/src/app/App.tsx
+- infra/deploy_cloud_run.sh
+- infra/cloudbuild.*.yaml
+- infra/CLOUD_SETUP.md
+
+Next Tasks:
+- BACK-003 (replace bridge stub with ADK Live runner)
+- FRONT-002 (latency tuning + chunk cadence control)
+- BACK-004
+
+---
+### Session 2 - 2026-03-08 08:30 EST
+Completed Tasks:
+- Backend dependency installation and tests executed successfully.
+- Frontend dependency installation and production build completed.
+- Cloud deployment artifacts added (`infra/`).
+
+Tech Notes:
+- Fixed pytest module discovery with `backend/tests/conftest.py`.
+- Added AudioWorklet processor file for PCM capture path consistency.
+- Deploy script now uses Cloud Build configs and Cloud Run session affinity.
+
+Test Evidence:
+- Command: `pytest -q backend/tests`
+- Input: backend health + websocket flow tests
+- Expected: all tests pass
+- Actual: `2 passed in 0.73s`
+- Result: pass
+
+- Command: `npm run build` (frontend)
+- Input: TypeScript compile + Vite production bundle
+- Expected: successful build output in `dist/`
+- Actual: build succeeded; bundle generated
+- Result: pass
+
+Files Touched:
+- backend/tests/conftest.py
+- frontend/src/hooks/useAudioPlayer.ts
+- frontend/src/hooks/useVoiceCapture.ts
+- frontend/src/worklets/pcm-processor.js
+- infra/cloudbuild.frontend.yaml
+- infra/cloudbuild.backend.yaml
+- infra/deploy_cloud_run.sh
+
+Next Tasks:
+- BACK-003: replace `LiveBridge` stub with full ADK Live runner
+- BACK-004: orchestrator + board agents
+- FRONT-003: war-room UI layout
+
+---
